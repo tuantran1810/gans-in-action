@@ -1,4 +1,9 @@
 from loguru import logger as log
+import numpy as np
+from typing import Tuple
+import matplotlib.pyplot as plt
+from scipy.stats import norm
+
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import Model, layers
@@ -16,7 +21,7 @@ class Sampling(layers.Layer):
         eps: tf.Tensor = kb.random_normal(shape = (batch, dim), stddev = self.__stddev)
         return kb.exp(zlogvar/2) * eps + zmean
 
-class Encoder(layers.Layer):
+class Encoder(Model):
     def __init__(
         self,
         latentDim:         int,
@@ -50,7 +55,7 @@ class Encoder(layers.Layer):
         z = self.__lambdaLayer((meanResult, logVarResult))
         return meanResult, logVarResult, z
 
-class Decoder(layers.Layer):
+class Decoder(Model):
     def __init__(
         self,
         originalDim:       int,
@@ -61,7 +66,8 @@ class Decoder(layers.Layer):
         self.__intermediateLayer: layers.Layer = layers.Dense(
             intermediateDim,
             activation = 'relu',
-            name = 'decoder_intermediate'
+            name = 'decoder_intermediate',
+            use_bias = True
         )
 
         self.__outputLayer: layers.Layer = layers.Dense(
@@ -102,14 +108,19 @@ class VariationalAutoencoder(Model):
         self.add_loss(klloss)
         return reconstructed
 
-def prepareDataset() -> tf.Tensor:
-    (xtrain, _), _ = tf.keras.datasets.mnist.load_data()
+    def encodeData(self, data: tf.Tensor, batchSize: int) -> tf.Tensor:
+        return self.__encoder.predict(data, batch_size = batchSize)
+
+    def decodeData(self, data: tf.Tensor) -> tf.Tensor:
+        return self.__decoder.predict(data)
+
+def prepareDataset() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    (xtrain, _), (xtest, ytest) = tf.keras.datasets.mnist.load_data()
     xtrain = xtrain.reshape(60000, 784).astype("float32") / 255
-    return xtrain
+    xtest = xtest.reshape(10000, 784).astype("float32") / 255
+    return xtrain, xtest, ytest
 
-def main() -> None:
-    log.info("hello!")
-
+def createVae(data) -> Model:
     vae = VariationalAutoencoder(
         originalDim = 784,
         latentDim = 2,
@@ -119,15 +130,53 @@ def main() -> None:
     vae.compile(
         optimizer = optimizer, 
         loss = tf.keras.losses.MeanSquaredError(),
-        # metrics = [tf.keras.metrics.Mean()]
     )
-    xtrain = prepareDataset()
+
     vae.fit(
-        xtrain,
-        xtrain,
+        data,
+        data,
         batch_size = 64,
-        epochs = 2
+        epochs = 1
     )
+    return vae
+
+def encodeData(model: Model, datax: tf.Tensor, datay: tf.Tensor) -> None:
+    _, _, z = model.encodeData(datax, batchSize = 64)
+    plt.figure(figsize=(6, 6))
+    plt.scatter(z[:,0], z[:,1], c=datay, cmap='viridis')
+    plt.colorbar()
+    plt.show()
+
+def generate(model: Model) -> None:
+    n = 15 
+    digit_size = 28
+    figure = np.zeros((digit_size * n, digit_size * n))
+    grid_x = norm.ppf(np.linspace(0.05, 0.95, n))
+    grid_y = norm.ppf(np.linspace(0.05, 0.95, n))
+
+    for i, yi in enumerate(grid_x):
+        for j, xi in enumerate(grid_y):
+            z_sample = np.array([[xi, yi]])
+            x_decoded = model.decodeData(z_sample)
+            digit = x_decoded[0].reshape(digit_size, digit_size)
+            figure[i * digit_size: (i + 1) * digit_size,
+                j * digit_size: (j + 1) * digit_size] = digit
+
+    plt.figure(figsize=(10, 10))
+    plt.imshow(figure, cmap='Greys_r')
+    plt.show()
+
+def main() -> None:
+    log.info("hello!")
+    xtrain, xtest, ytest = prepareDataset()
+    # vae: tf.Model = createVae(xtrain)
+    # encodeData(vae, xtest, ytest)
+    # generate(vae)
+
+    decoder = Decoder(784, 256)
+    decoder.build(input_shape = (2, 1))
+    decoder.summary()
+
 
 if __name__ == "__main__":
     main()
